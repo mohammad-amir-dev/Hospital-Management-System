@@ -1,0 +1,423 @@
+import {
+    ActionIcon,
+    Badge,
+    Button,
+    Card,
+    Divider,
+    Fieldset,
+    Grid,
+    Group,
+    LoadingOverlay,
+    Modal,
+    NumberInput,
+    SegmentedControl,
+    Select,
+    SelectProps,
+    Text,
+    TextInput,
+    Title,
+} from "@mantine/core";
+import { useForm } from "@mantine/form";
+import { IconCheck, IconEye, IconLayoutGrid, IconPlus, IconSearch, IconTable, IconTrash } from "@tabler/icons-react";
+import { useDispatch } from "react-redux";
+import React, { useEffect, useState } from "react";
+import { DataTable, DataTableFilterMeta } from "primereact/datatable";
+import { useNavigate } from "react-router-dom";
+import { Column } from "primereact/column";
+import { FilterMatchMode } from "primereact/api";
+import { getAllMedicines } from "../../../Service/MedicineService";
+import { errorNotification, successNotification } from "../../../Utility/NotificationUtil";
+import { AddSale, getAllSaleItems, getAllSales } from "../../../Service/SalesService";
+import { formatDate } from "../../../Utility/DateUtitlity";
+import { useDisclosure, useMediaQuery } from "@mantine/hooks";
+import { spotlight, Spotlight, SpotlightActionData } from "@mantine/spotlight";
+import { getAllPrescriptions, getMedicinesByPrescriptionId } from "../../../Service/AppointmentService";
+import { freqMap } from "../../../Data/DropdownData";
+import { Toolbar } from "primereact/toolbar";
+import SaleCard from "./SaleCard";
+
+interface SaleItem {
+    medicineId: string;
+    quantity: number;
+}
+
+const Sales = () => {
+
+    const [filters, setFilters] = useState<DataTableFilterMeta>({
+        global: { value: null, matchMode: FilterMatchMode.CONTAINS },
+    });
+    const [globalFilterValue, setGlobalFilterValue] = useState<string>('');
+    const onGlobalFilterChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const value = e.target.value;
+        let _filters: any = { ...filters };
+
+        _filters['global'].value = value;
+
+        setFilters(_filters);
+        setGlobalFilterValue(value);
+    };
+    const dispatch = useDispatch();
+    const navigate = useNavigate();
+    const [data, setData] = useState<any[]>([]);
+    const [medicine, setMedicine] = useState<any[]>([]);
+    const matches = useMediaQuery('(max-width: 768px)');
+    const [edit, setEdit] = useState<boolean>(false);
+    const [loading, setLoading] = useState(false);
+    const [view, setView] = useState("table");
+    const [medicineMap, setMedicineMap] = useState<Record<string, any>>({});
+    const [opened, { open, close }] = useDisclosure(false);
+    const [saleItems, setSaleItems] = useState<any[]>([]);
+    const [actions, setActions] = useState<SpotlightActionData[]>([]);
+
+
+    // medicineId,  quantity  as array
+    const form = useForm({
+        initialValues: {
+            buyerName: '',
+            buyerContact: '',
+            saleItems: [
+                { medicineId: '', quantity: 0 }
+            ] as SaleItem[],
+        },
+        validate: {
+            saleItems: {
+
+                medicineId: (value) => (value ? null : 'Medicine is required'),
+                quantity: (value) => (value > 0 ? null : 'Quantity must be positive'),
+            }
+        }
+    })
+
+    useEffect(() => {
+        getAllMedicines().then((res) => {
+            setMedicine(res);
+            setMedicineMap(res.reduce((acc: any, item: any) => {
+                acc[item.id] = item;
+                return acc;
+            }, {}));
+            console.log(res);
+        }).catch((err) => {
+            console.error("Error fetching reports:", err);
+        });
+        getAllPrescriptions().then((res) => {
+            setActions(res.map((item: any) => ({
+                id: String(item.id),
+                label: item.patientName,
+                description: `Prescription by Dr. ${item.doctorName} on ${formatDate(item.prescriptionDate)}`,
+                onClick: () => handleImport(item),
+            })));
+        }).catch((err) => {
+            console.error("Error fetching prescriptions:", err);
+        });
+        fetchData()
+
+    }, []);
+
+    const handleImport = (item: any) => {
+        setLoading(true);
+        getMedicinesByPrescriptionId(item.id).then((res) => {
+            setSaleItems(res);
+            form.setValues({
+                buyerName: item.patientName,
+
+                saleItems: res.filter((x: any) => x.medicineId != null).map((x: any) => ({ medicineId: String(x.medicineId), quantity: calculateQuantity(x.frequency, x.duration) }))
+            });
+            console.table(res);
+        }).catch((err) => {
+            console.error("Error fetching medicines:", err);
+        }).finally(() => {
+            setLoading(false);
+        });
+    }
+
+    const calculateQuantity = (freq: string, duration: number) => {
+        const freqValue = freqMap[freq] || 0;
+        return Math.ceil(freqValue * duration);
+    }
+
+    // const actions: SpotlightActionData[] = [
+    //     {
+    //         id: 'home',
+    //         label: 'Home',
+    //         description: 'Get to home page',
+    //         onClick: () => console.log('Home'),
+    //         leftSection: <IconHome size={24} stroke={1.5} />,
+    //     },
+
+    // ];
+    const fetchData = () => {
+        getAllSales().then((res) => {
+            setData(res);
+            console.log(res);
+        }).catch((err) => {
+            console.error("Error fetching sales:", err);
+        });
+
+
+    }
+
+
+    const onEdit = (rowData: any) => {
+        setEdit(true);
+        form.setValues({
+            ...rowData,
+            medicineId: String(rowData.medicineId),
+            batchNo: rowData.batchNo,
+            quantity: rowData.quantity,
+            expiryDate: new Date(rowData.expiryDate)
+        });
+    }
+
+    const handleDetails = (rowData: any) => {
+        open();
+        setLoading(true);
+        getAllSaleItems(rowData.id).then((res) => {
+            setSaleItems(res);
+            console.log(res);
+        }).catch((err) => {
+            console.error("Error fetching sale items:", err);
+        }).finally(() => {
+            setLoading(false);
+        });
+    }
+
+    const handleSubmit = (values: any) => {
+        let update = false;
+        let flag = false;
+        values.saleItems.forEach((item: any, index: number) => {
+            if (item.quantity > (medicineMap[item.medicineId]?.stock || 0)) {
+                flag = true;
+                form.setFieldError(`saleItems.${index}.quantity`, 'Quantity exceeds available stock');
+            }
+        });
+        if (flag) {
+            errorNotification("Quantity exceeds available stock");
+            return;
+        }
+        const saleItems = values.saleItems.map((x: any) => ({ ...x, unitPrice: medicineMap[x.medicineId]?.unitPrice }));
+        const totalAmount = saleItems.reduce((acc: number, item: any) => acc + (item.unitPrice * item.quantity), 0);
+        setLoading(true);
+        AddSale({ ...values, saleItems, totalAmount })
+            .then((_res) => {
+                successNotification(`Medicine sold successfully`);
+                form.reset();
+                setEdit(false);
+                fetchData();
+            })
+            .catch((err) => {
+                errorNotification(err?.response?.data?.errorMessage || `Failed to sold Medicine`);
+            }).finally(() => {
+                setLoading(false);
+            })
+    }
+    const cancel = () => {
+        form.reset();
+        setEdit(false);
+    }
+    const addMore = () => {
+        form.insertListItem('saleItems', { medicineId: '', quantity: 0 });
+    }
+
+    const renderHeader = () => {
+        return (
+            <div className="flex flex-wrap gap-2 justify-between items-center">
+
+                <Button variant="filled" onClick={() => setEdit(true)} >Sell Medicine</Button>
+                <TextInput leftSection={<IconSearch />} fw={500} value={globalFilterValue} onChange={onGlobalFilterChange} placeholder="Keyword Search" />
+            </div>
+        );
+    };
+
+    const startToolbarTemplate = () => {
+        return (
+            <Button variant="filled" onClick={() => setEdit(true)} >Sell Medicine</Button>
+        );
+    };
+    const rightToolbarTemplate = () => {
+        return (
+            <div className="md:flex hidden  flex-wrap gap-2 justify-end items-center">
+
+                <SegmentedControl
+                    value={view}
+                    color='primary'
+                    onChange={setView}
+                    size={matches ? "xs" : "md"}
+                    data={[
+                        { label: <IconTable />, value: 'table' },
+                        { label: <IconLayoutGrid />, value: 'card' }
+                    ]}
+                />
+                <TextInput className='lg:block hidden' leftSection={<IconSearch />} fw={500} value={globalFilterValue} onChange={onGlobalFilterChange} placeholder="Keyword Search" />
+            </div>
+        );
+    };
+    const actionBodyTemplate = (rowData: any) => {
+        return <div className='flex gap-2'>
+            <ActionIcon onClick={() => handleDetails(rowData)}>
+                <IconEye size={20} stroke={1.5} />
+            </ActionIcon>
+
+        </div>
+    };
+    const header = renderHeader()
+
+    const renderSelectOption: SelectProps['renderOption'] = ({ option, checked }: any) => (
+        <Group flex="1" gap="xs">
+            <div className="flex gap-2 items-center">
+
+                {option.label}
+                {option?.manufacturer && <span style={{ marginLeft: 'auto', fontSize: '0.8em', color: 'gray' }}>{option.manufacturer} - {option.dosage}</span>}
+            </div>
+            {checked && <IconCheck style={{ marginInlineStart: 'auto' }} />}
+        </Group>
+    );
+
+    const statusBody = (rowData: any) => {
+        const isExpired = new Date(rowData.expiryDate) < new Date();
+        return <Badge color={isExpired ? "red" : "green"}>{isExpired ? "Expired" : "Active"}</Badge>;
+    }
+
+    const handleSpotlight = () => {
+        spotlight.open();
+    }
+    //name, dosage, category, type, manufacturer, unitPrice
+    return (
+        <div>
+            {!edit ? <div>
+                <Toolbar className="mb-4 !p-1" start={startToolbarTemplate} end={rightToolbarTemplate}></Toolbar>
+                {view == "table" && !matches ? <DataTable removableSort stripedRows value={data} size='small' paginator rows={10}
+                    paginatorTemplate="FirstPageLink PrevPageLink PageLinks NextPageLink LastPageLink CurrentPageReport RowsPerPageDropdown"
+                    rowsPerPageOptions={[10, 25, 50]} dataKey="id"
+
+                    filterDisplay="menu" globalFilterFields={['doctorName', 'notes']}
+                    emptyMessage="No appointment found." currentPageReportTemplate="Showing {first} to {last} of {totalRecords} entries">
+
+                    <Column field="buyerName" header="Buyer" />
+
+                    <Column field="buyerContact" header="Contact" />
+                    {/* <Column field="Prescription" header="Pris" /> */}
+                    <Column field="totalAmount" header="Total Amount" sortable />
+                    <Column field="saleDate" header="Sale Date" sortable body={rowData => formatDate(rowData.saleDate)} />
+
+
+
+
+                    <Column headerStyle={{ textAlign: 'center' }} bodyStyle={{ textAlign: 'center', overflow: 'visible' }} body={actionBodyTemplate} />
+
+                </DataTable> : <div className='grid lg:grid-cols-4 md:grid-cols-3 sm:grid-cols-2 grid-cols-1 gap-5'>
+                    {
+                        data?.map((appointment) => (<SaleCard key={appointment.id}  {...appointment} onView={() => handleDetails(appointment)} />))
+                    }
+                    {
+                        data.length === 0 && <div className='col-span-4 text-center text-gray-500'>No medicine found.</div>
+                    }
+                </div>} </div>
+                : <div>
+                    <div className="mb-5 flex items-center justify-between">
+                        <h3 className="text-xl text-primary-500 font-medium">Sell Medicine</h3>
+                        <Button variant="filled" leftSection={<IconPlus />} onClick={handleSpotlight}>Import Prescription</Button>
+                    </div>
+                    <form onSubmit={form.onSubmit(handleSubmit)} className="grid gap-5">
+                        <LoadingOverlay visible={loading} />
+                        <Fieldset className="grid gap-5" legend={<span className="text-lg font-medium text-primary-500">Buyer information</span>} radius="md">
+                            <div className="grid sm:grid-cols-2 gap-5">
+
+                                <TextInput withAsterisk label="Buyer Name" placeholder="Enter buyer name" {...form.getInputProps('buyerName')} />
+                                <NumberInput maxLength={10} label="Contact Number" placeholder="Enter contact number" {...form.getInputProps('buyerContact')} />
+                            </div>
+
+                        </Fieldset>
+                        <Fieldset className="grid gap-5" legend={<span className="text-lg font-medium text-primary-500">Medicine information</span>} radius="md">
+                            <div className="grid gap-4 sm:grid-cols-5">
+                                {//arr[0].name=> arr.0.name
+                                    form.values.saleItems.map((item, index) => (
+                                        <React.Fragment key={index}>
+                                            <div className="col-span-2">
+                                                <Select renderOption={renderSelectOption} {...form.getInputProps(`saleItems.${index}.medicineId`)} label="Medicine" placeholder="Select medicine" data={medicine.filter(x => !form.values.saleItems.some((item1: any, idx) => item1.medicineId == x.id && idx != index)).map(item => ({ ...item, value: "" + item.id, label: item.name }))} />
+                                            </div>
+                                            <div className="col-span-2">
+                                                <NumberInput rightSectionWidth={80} rightSection={<div className="text-xs flex gap-1 text-white font-medium rounded-md bg-red-400 p-1">Stock: {medicineMap[item.medicineId]?.stock}</div>} {...form.getInputProps(`saleItems.${index}.quantity`)} min={0} max={medicineMap[item.medicineId]?.stock || 0} clampBehavior="strict" label="Quantity" placeholder="Enter quantity" />
+                                            </div>
+                                            <div className="flex items-end justify-between">
+
+                                                {(item.quantity && item.medicineId) ? <div>Total: {item.quantity} X {medicineMap[item.medicineId]?.unitPrice} = {item.quantity * medicineMap[item.medicineId]?.unitPrice}</div> : <div></div>}
+                                                <ActionIcon size="lg" color="red" onClick={() => form.removeListItem('saleItems', index)} >
+                                                    <IconTrash size={20} />
+                                                </ActionIcon>
+                                            </div>
+                                        </React.Fragment>
+                                    ))
+                                }
+
+
+                            </div>
+                            <div className="flex items-center justify-center">
+                                <Button onClick={addMore} variant="outline" leftSection={<IconPlus size={16} />}>Add more</Button>
+                            </div>
+                        </Fieldset>
+
+
+                        <div className="flex items-center gap-5 justify-center">
+                            <Button loading={loading} type="submit" className="w-full" variant="filled" color="primary">Sell Medicine</Button>
+                            <Button loading={loading} onClick={cancel} variant="filled" color="red" >Cancel</Button>
+                        </div>
+                    </form></div>}
+            <Modal opened={opened} size="xl" onClose={close} title="Sold Medicines" centered>
+                <div className="grid sm:grid-cols-2 gap-5">
+
+                    {
+                        saleItems?.map((data: any, index: number) => (
+                            <Card key={index} shadow="md" radius="md" padding="lg" withBorder>
+                                <Title order={4} mb="sm">
+                                    {medicineMap[data.medicineId]?.name} - {medicineMap[data.medicineId]?.dosage} <span className="text-gray-600">({medicineMap[data.medicineId]?.manufacturer})</span>
+                                </Title>
+
+                                <Text size="xs">{data.batchNo}</Text>
+
+                                <Divider my="xs" />
+
+                                <Grid>
+                                    <Grid.Col span={4}>
+                                        <Text size="sm" fw={500}>Quantity:</Text>
+                                        <Text>{data.quantity}</Text>
+                                    </Grid.Col>
+                                    <Grid.Col span={4}>
+                                        <Text size="sm" fw={500}>Unit Price:</Text>
+                                        <Text>{data.unitPrice}</Text>
+                                    </Grid.Col>
+                                    <Grid.Col span={4}>
+                                        <Text size="sm" fw={500}>Total:</Text>
+                                        <Text>₹ {data.quantity * data.unitPrice} </Text>
+                                    </Grid.Col>
+
+                                </Grid>
+                            </Card>
+                        ))
+                    }
+                </div>
+                {
+                    saleItems.length === 0 && (
+                        <Text color="dimmed" size="sm" mt="md">
+                            No medicines prescribed for this appointment.
+                        </Text>
+                    )
+                }
+            </Modal>
+            <Spotlight
+                actions={actions}
+                nothingFound="Nothing found..."
+                highlightQuery
+                searchProps={{
+                    leftSection: <IconSearch size={20} stroke={1.5} />,
+                    placeholder: 'Search...',
+                }}
+            />
+        </div >
+    )
+}
+
+export default Sales
+
+
+
+
